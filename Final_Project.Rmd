@@ -304,7 +304,12 @@ plot_LASSO_coefficients <- LASSO_coefficients_Meta %>%
 plot_LASSO_coefficients %>% 
 ggplotly()
 
-##Validating:
+```
+
+Caveat - We were unsure about the exact cross-validation because we didn't know the weighting mechanism of the Kaggle Scoring process for this competition.
+Here's the CV code -excluding runs because of prohibitive knitting times
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
 
 ##Our training score
 training_unit_sales <- predict(LASSO_fit, newx = predictor_matrix_train, s = lambda_star_1SE) 
@@ -317,9 +322,30 @@ Coefficient_Values <-get_LASSO_coefficients(LASSO_fit) %>%
  filter(estimate != 0) %>%
  knitr::kable(digits=5)
 
+#ds8 <- Train
+#folded <- createFolds(ds8, k = 10, list = TRUE, returnTrain = FALSE)
+#lambdas_to_test<- c(.0001,.001,.01,.1) #based on our tests and intuition, very small lambdas are useful int his context
+#results <- matrix(0, ncol = 4, nrow = 10)
+#results <- data.frame(results)
+ 
+#for (i in 1:4){
+ # lambda <- lambdas_to_test[i]
+  #for (j in 1:10){
+   # this_set <- filter(ds8, ds8$fold != i)
+    #this_test <- filter(ds8, ds8$fold == i)
+    #predictor_matrix_train <- model.matrix(model_formula, data = this_set) [,-1]
+    #LASSO_fit <- glmnet(x = predictor_matrix_train, y = projds$log_unit_sales, alpha = 1)
+   # predictions <- predict(LASSO_fit, newx=this_test, s=lambda)
+   # rmse <- predictions - this_test$unit_sales %>%
+  #    `^`(2) %>%
+  #    mean %>%
+  #    `sqrt`
+ #   results[j,i] <- rmse
+#  }
+ # }
 ```
 
-Caveat - We were unsure about the exact cross-validation because we didn't know the weighting mechanism of the Kaggle Scoring process for this competition.
+
 
 ## Create submission
 
