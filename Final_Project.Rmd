@@ -1,6 +1,6 @@
 ---
 title: "Final Project"
-author: "WRITE GROUP MEMBERS NAMES HERE!"
+author: "Abbas Shah, Caleb Brooks, Kiryu Kawahata"
 date: "December 22, 2017"
 output:
   html_document:
@@ -18,74 +18,381 @@ output:
 ## Load all packages
 
 ```{r, message=FALSE, warning=FALSE, fig.width=8, fig.height=4.5, echo=FALSE}
-
+require(mosaic)   
+library(knitr)
+library(tidyverse)
+library(ggthemes)
+library(MASS)
+library(tree)
+library(glmnet)
+library(caret)
+library(rpart)
+library(randomForest)
+library(plotly)
+library(ranger)
+library(MLmetrics)
+library(rpart.plot)
+library(reshape2)
+library(ggfortify)
 ```
 
 
 
 ## Load data and perform data cleaning
 
-Please delete all "notes" before submission.
+###Data Merging
 
-Note: CSV/data files should be read assuming they are in the `data` folder. In
-other words, load data via `read_csv("data/CSV_NAME.csv")` and not via
-`read_csv("/Users/aykim/Documents/MATH495/Final_Project/data/CSV_NAME.csv")`
+There are multiple metadatasets from the Kaggle competition that we need to merge to make the training dataset. Moreover, since we obtained external data, we need to add that too.
+Given the large size of the original training set (125 million observations), We randomly sampled 1 million observations to make our work more feasible.
 
 ```{r, message=FALSE, warning=FALSE, fig.width=8, fig.height=4.5, echo=FALSE}
+Sampled_data <- read_csv("data/projds3")
+stores <- read_csv("data/stores.csv")
+items <- read_csv("data/items.csv")
+transactions <- read_csv("data/transactions.csv")
+holidays_events <- read_csv("data/holidays_events.csv")
+oil <- read_csv("data/oil.csv")
+sample_submission <- read_csv("data/sample_submission.csv")
+test <- read_csv("data/test.csv")
+econ <- read_csv("data/updatedecon.csv")
 
+#Merging Training Datasets
+
+ds2<- left_join(Sampled_data, stores, by= "store_nbr")
+ds3<- left_join(ds2, items, by="item_nbr")
+ds4 <- left_join(ds3, transactions, by=c("date","store_nbr"))
+ds5<- left_join(ds4, oil, by="date")
+train<- left_join(ds5, holidays_events, by="date")
+
+ds5$year <- format(as.Date(ds5$date), c("%Y"))
+ds5$month <- format(as.Date(ds5$date), c("%m"))
+ds5$day <- format(as.Date(ds5$date), c("%d"))
+ds5$Date <-format(as.Date(ds5$date), c("%Y - %m"))
+
+#Merging Test Datasets
+
+test1<- left_join(test, stores, by="store_nbr")
+test2<- left_join(test1, items, by="item_nbr")
+test3<- left_join(test2, transactions, by=c("date", "store_nbr"))
+test4<- left_join(test3, oil, by="date")
+test5<-test4
+test5$year <- format(as.Date(test4$date), c("%Y"))
+test5$month <- format(as.Date(test4$date), c("%m"))
+test5$day <- format(as.Date(test4$date), c("%d"))
+test5$Date <-format(as.Date(test4$date), c("%Y -  %m"))
+
+#Adding Economic Data
+
+
+econ2<- econ[-c(1:2,15:19,32:36,49:53,66:70, 82:85),]
+#econ2$Series
+years <- c(rep(2013,12), rep(2014,12), rep(2015,12), rep(2016,12), rep(2017,8))
+months<-as.character(c("01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11","12","01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11","12","01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11","12","01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11","12","01", "02", "03", "04", "05", "06", "07", "08"))
+econ3<-econ2 %>% 
+  mutate(year =years, month=months )
+nomissing<-which(unlist(lapply(econ3, function(x) any(is.na(x)))) == FALSE)
+#nomissing
+econ4<-econ3[,nomissing]
+econ5 <- econ4[,-c(1,5,6,13)]
+
+econ5$year<-as.character(econ5$year)
+econ5$month<-as.character(econ5$month)
+
+ds7 <- left_join(ds5,econ5, by=c("year","month"))
+test_updated<- left_join(test5, econ5, by=c("year","month"))
+
+#remove<-which(ds7$year==2017 & ds7$month == "08")
+#ds8<- ds7[-remove,]
+
+
+#Final Training Set
+
+Train <- ds7
 ```
 
+The cleaned/merged Training set is called 'Train'. It has 30 variables. 
+The Test Set is called 'test_updated'.
+
+A couple of things to bear in mind:
+
+1)The Economic indicators vary monthly (i.e. the ) whereas the Kaggle data varies daily.
+2)Lots of missing values in both the training sets and test sets. sometimes, entire variables are missing in the test set.
+3) There's roughly 3.75 years worth of data in training set and a couple of days worth of data in the Test Set. 
+
+Research Question:  Brick-and-mortar stores have to stock physical products on-location, so preparing for demand is key. How can we model and predict unit sales (in order to determine what quantity  to stock)? What economic and product-related factors are relevant?
 
 
 ## EDA visualizations and tables
 
-Note: If you had to illustrate using no modelling but only graphs and tables which
-variables have the most predictive power, which would you include?
+###Univariate Displays:
 
-* Perform a cross-validation on only the final/ultimate model used for your
-submission.
-* The "score" in question should be the same as used to compute the Kaggle
-leaderboard. In other words, your estimated score should be roughly equal to the
-score returned by Kaggle after your submission.
+Let's look at the distribution of the Response Variable, Unit Sales.
+We're removing the extreme outliers (as they make it harder to see the distribution).
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, paged.print=FALSE}
+kable(favstats(ds5$unit_sales))
+Train %>% 
+  filter(unit_sales<50 & unit_sales>0) %>% 
+ ggplot(aes(x=unit_sales)) + geom_histogram(stat="density", colour="red")+ labs(title="Distribution of Unit Sales", x="Unit Sales", y="Density") + theme_bw() + theme(plot.title = element_text(hjust = 0.5))
+```
 
 
+Let's look at the distribution of Unit Sales over time.
 
-## Crossvalidation of ultimate model
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+Train %>%  
+  group_by(date) %>% 
+  summarise(`Mean Daily Unit Sales` = mean(unit_sales)) %>% 
+  ggplot(aes(x=date, y=`Mean Daily Unit Sales`)) + geom_line(group=1, lty=1, colour="red")+  theme_minimal() +labs(x="Date")+theme(axis.text.x = element_text(face="bold", color="#993333", 
+                           size=12, angle=90),
+          axis.text.y = element_text(face="bold", color="#993333", 
+                           size=12, angle=45)) + labs(title = "Mean Unit Sales (per Day) Over Time ", subtitle="From January 2015 to August 2017")+theme(plot.title = element_text(hjust = 0.5,size=17), plot.subtitle = element_text(hjust = 0.5, size=14), axis.title.x = element_text(size=15), axis.title.y = element_text(size=14))
+```
 
-Note: Hardcode your crossvalidation here i.e. do not use built-in crossvalidation
-options.
 
-```{r, message=FALSE, warning=FALSE, fig.width=8, fig.height=4.5, echo=FALSE}
+Evidently, Unit Sales fluctuate over time. We can see that there is evidence of seasonality and a slight negative trend line overall. A time series decomposition would be useful to visualize the spread of both unit sales and mean unit sales over time.
+
+#### Fluctuation of Oil Prices over time:
+```{r echo=FALSE, fig.height=4.5, fig.width=8, message=FALSE}
+theme_set(theme_classic())
+ggplot(ds5, aes(x=date)) + geom_line(aes(y=dcoilwtico), colour="brown") + labs(  y="Daily Oil Price per Barrel ($)") +labs(x="Date")+theme(axis.text.x = element_text(face="bold", color="#993333", 
+                           size=12, angle=90),
+          axis.text.y = element_text(face="bold", color="#993333", 
+                           size=12, angle=45)) + labs(title = "Fluctuations in Oil Price Over Time ", subtitle="From January 2015 to August 2017")+theme(plot.title = element_text(hjust = 0.5,size=17), plot.subtitle = element_text(hjust = 0.5, size=14), axis.title.x = element_text(size=15), axis.title.y = element_text(size=14))
+```
+
+We include this here because, surprisingly, oil price wasn't super useful in any of our models. That could be because we didn't account for the effects of time. That said, perhaps encoding this variable as a categorical variable (high vs low prices etc) could be fruitful.
+
+
+###Multivariate Displays:
+
+Some of the predictors turned out to have very strong relationships with the Response Variable.
+Others (like Oil Price) had surprisingly weaker relationships with the response variable than we initially expected.
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+Train %>% 
+  filter(unit_sales<50 & unit_sales>0) %>% 
+  ggplot(aes(x=as.factor(family),y=unit_sales)) + geom_boxplot(outlier.alpha=0) + coord_flip() + theme_economist() + labs(title = "Unit Sales per Family", x="Unit 'Family'", y="Unit Sales (count)")+theme(plot.title = element_text(hjust = 0.5,size=17), axis.title.x = element_text(size=15), axis.title.y = element_text(size=14))
+```
+
+Evidently, as this plot shows, certain groups of products and commodities sell more, on average, then others do.
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+temp<-Train %>%  
+  group_by(Date) %>% 
+  summarise(`Average Sales per Month` = mean(unit_sales), `Average Number of Transactions per Month`= mean(transactions, na.rm=TRUE) )
+temp$`Average Number of Unit Sales per Month (^3)` <- temp$`Average Sales per Month`^3
+temp <- temp[,-2]
+
+temp2 <- melt(temp)
+
+  ggplot(temp2, aes(x= Date, y=value, group=variable, colour=variable))  + geom_line()+ theme_bw() +labs(x="Date", y="Count")+theme(axis.text.x = element_text(face="bold", color="#993333",   size=9, angle=90),
+          axis.text.y = element_text(face="bold", color="#993333", 
+                           size=12, angle=45)) + labs(title = "Comparing Mean Number of Transactions and Mean Number of Unit Sales ", subtitle="From January 2015 to August 2017")+theme(plot.title = element_text(hjust = 0.5,size=17), plot.subtitle = element_text(hjust = 0.5, size=14), axis.title.x = element_text(size=15), axis.title.y = element_text(size=14))
+```
+
+Clearly, the number of Transactions has a strong relationship with the number of units sold.
+
+Finally, we think that the Store number (which accounts for region) has a strong relationship with the number of units solds. There will be higher sales in populated cities, etc.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+Train %>% 
+filter(unit_sales<50 & unit_sales>0) %>% 
+  ggplot(aes(x=as.factor(store_nbr),y=unit_sales)) + geom_boxplot(outlier.alpha=0, color="red") + coord_flip() + theme_bw() + labs(title = "Unit Sales per Store Number", x="Unit ", y="Unit Sales (count)")+theme(plot.title = element_text(hjust = 0.5,size=17), axis.title.x = element_text(size=15), axis.title.y = element_text(size=14))
+```
+
+
+In this exploratory analysis, we wanted to visualize the distribution of the covariates available to us to see whether our understandings of their relationship with unit sales would hold. The ones we displayed above showed some particularly promising signs in terms of being useful predictors and, as we'll see later, they were fairly important.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
 
 ```
 
 
 
+##Models and validation
+
+We made a number of Models with varying degrees of success.
+Here,for simplicity's sake, we're only including the Linear and the LASSO model (i.e. the baseline and the ultimate model):
+
+
+### Linear Model
+Our baseline model was a 'full' linear model which contained a number of predictors.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+ds<-Train %>% 
+  mutate(cluster= as.factor(cluster) ,family=as.factor(family) , city=as.factor(city) , perishable=as.factor(perishable) ,onpromotion=as.factor(onpromotion) , type=as.factor(type),store_nbr = as.factor(store_nbr), item_nbr = as.factor(item_nbr))
+ts1 <- test_updated %>% 
+  mutate(cluster= as.factor(cluster) ,family=as.factor(family) , city=as.factor(city) , perishable=as.factor(perishable) ,onpromotion=as.factor(onpromotion)  , type=as.factor(type), store_nbr = as.factor(store_nbr),  item_nbr = as.factor(item_nbr))
+
+model<-lm(unit_sales~ dcoilwtico  + `CPI Price, seas. adj.,,,` + `Exports Merchandise, Customs, current US$, millions, seas. adj.` + `Industrial Production, constant US$, seas. adj.,,` + `J.P. Morgan Emerging Markets Bond Spread (EMBI+),,,,` + `Real Effective Exchange Rate,,,,` + `Unemployment rate,Percent,,,` + cluster + family + city + perishable + month +onpromotion + type, data=ds)
+y_hat <- predict(model, newdata=ts1)
+
+model %>% 
+ broom::glance()
+```
+
+The score we got was around 1.4 using just this model.
+
+
+###LASSO:
+Ultimately, we ended up running with our LASSO model as it had the best score on Kaggle.
+
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+projds <- Train
+ts3<- test_updated
+projds <- projds %>% 
+  mutate(log_unit_sales = log(unit_sales)) %>% 
+  drop_na()
+ts3 <- ts3 %>% 
+  mutate(log_unit_sales = 1) 
+
+model_formula <- as.formula("log_unit_sales ~ date + store_nbr + item_nbr + onpromotion + city + state + type + cluster + family + class + perishable")
+
+predictor_matrix_train <- model.matrix(model_formula, data = projds) [,-1]
+predictor_matrix_test <- model.matrix(model_formula, data = ts3) [, -1] 
+
+LASSO_fit <- glmnet(x = predictor_matrix_train, y = projds$log_unit_sales, alpha = 1)
+LASSO_CV <- cv.glmnet(x=predictor_matrix_train, y = projds$log_unit_sales, alpha=1)
+lambda_star <- LASSO_CV$lambda.min
+lambda_star_1SE <- LASSO_CV$lambda.1se
+
+unit_sales <- predict(LASSO_fit, newx=predictor_matrix_test, s=lambda_star_1SE) %>%
+  as.vector() %>% 
+  exp()
+
+final_submission <- sample_submission
+final_submission$unit_sales <- unit_sales
+```
+
+
+
+
+### Plotting the LASSO fit: 
+
+```{r}
+#Function below is required to generate desired plots for LASSO:
+
+get_LASSO_coefficients <- function(LASSO_fit){
+  coeff_values <- LASSO_fit %>% 
+    broom::tidy() %>% 
+    as_tibble() %>% 
+    select(-c(step, dev.ratio)) %>% 
+    tidyr::complete(lambda, nesting(term), fill = list(estimate = 0)) %>% 
+    arrange(desc(lambda)) %>% 
+    select(term, estimate, lambda)
+  return(coeff_values)
+}
+
+#Load the code below to visualize LASSO on the FULL METADATA:
+
+LASSO_coefficients_Meta <- get_LASSO_coefficients(LASSO_fit) %>% 
+  filter(term != "(Intercept)")
+
+plot_LASSO_coefficients <- LASSO_coefficients_Meta %>% 
+  ggplot(aes(x=lambda, y=estimate, col=term)) +
+  geom_line() +
+  scale_x_log10() +
+  labs(x="lambda (log10-scale)", y="beta-hat coefficient estimate",
+       title="LASSO on complete Metadata") +
+  geom_vline(xintercept = lambda_star, col="red", alpha=0.4, linetype="dashed") +
+  geom_vline(xintercept = lambda_star_1SE, col="blue", alpha=0.4, linetype="dashed")
+  
+plot_LASSO_coefficients %>% 
+ggplotly()
+
+##Validating:
+
+##Our training score
+training_unit_sales <- predict(LASSO_fit, newx = predictor_matrix_train, s = lambda_star_1SE) 
+training_score <- RMSLE(exp(training_unit_sales), projds$unit_sales)
+training_score
+
+##finding coefficiens at a given lambda
+Coefficient_Values <-get_LASSO_coefficients(LASSO_fit) %>%
+ filter(lambda == lambda_star_1SE) %>%
+ filter(estimate != 0) %>%
+ knitr::kable(digits=5)
+
+```
+
+Caveat - We were unsure about the exact cross-validation because we didn't know the weighting mechanism of the Kaggle Scoring process for this competition.
+
 ## Create submission
 
-Note: Output a CSV using `write_csv(DATAFRAME_NAME, path="data/SUBMISSION_NAME.csv")`
-that is Kaggle submitable. This submission should return a Kaggle score that is
-close to your crossvalidated score.
+
+```{r}
+write_csv(final_submission, "data/Final_Submission.csv")
+```
+
 
 
 
 ## Citations and references
 
-Note: All citations and references must be included here.
+The data we worked with was taken from the Corporacion Favoriata Competition on Kaggle:
+https://www.kaggle.com/c/favorita-grocery-sales-forecasting
+The additional data we used was obtained from the World Bank.
 
 
 
-## Supplementary materials
 
-Note: Anything else you've tried that you'd like to include, but isn't essential to
-the above, like other EDA's, other modeling approaches you've tried, etc. Please
-set the R code chunk `eval=FALSE` here so that default is that R Markdown
-doesn't run the code, but a user can flip this switch if they are curious.
+
+##Supplementary Material - Additional Visualizations
+
+
+ Average Unit Sales per Month:
+
+```{r, eval=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=4.5, echo=FALSE}
+Train %>%  
+  group_by(Date) %>% 
+  summarise(`Average Sales per Month` = mean(unit_sales)) %>% 
+  ggplot(aes(x=Date, y=`Average Sales per Month`)) + geom_line(group=1, lty=5, colour="blue")+  theme_minimal() + theme(axis.text.x = element_text(face="bold", color="#993333", 
+                           size=8, angle=90),
+          axis.text.y = element_text(face="bold", color="#993333", 
+                           size=11, angle=45)) + labs(title = "Mean Unit Sales (per Month) Over Time ", subtitle="From January 2015 to August 2017")+theme(plot.title = element_text(hjust = 0.5,size=17), plot.subtitle = element_text(hjust = 0.5, size=12), axis.title.x = element_text(size=13), axis.title.y = element_text(size=14))
+```
+
+
+ Unit Sales based on State:
+```{r, eval=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=4.5, echo=FALSE}
+Train %>% 
+  filter(unit_sales<50 & unit_sales>0) %>% 
+  ggplot(aes(x=as.factor(state),y=unit_sales)) + geom_boxplot(outlier.alpha=0) + coord_flip() + theme_economist() + labs(title = "Unit Sales per Family", x="Unit 'Family'", y="Unit Sales (count)")+theme(plot.title = element_text(hjust = 0.5,size=17), axis.title.x = element_text(size=15), axis.title.y = element_text(size=14))
+```
+
+
+
+
 
 ```{r, eval=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=4.5, echo=FALSE}
 
 
 ```
+
+
+
+Looking at the distribution of mean sales by decile (with the top decile removed) to see the variations in spread.
+```{r, eval=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=4.5, echo=FALSE}
+
+names(ag) <- c('item_nbr','mean_sales')
+ag<-ag %>%
+    mutate(decile = ntile(mean_sales, 10))
+ag$decile <- factor(ag$decile)
+
+ag2 <- filter(ag, ag$decile != 10)
+ 
+ggplot(ag2, aes(x = decile, y = mean_sales)) +
+  geom_boxplot(fill = "red") +
+  xlab("decile") +
+  ylab("mean sales per store per observation")+
+  ggtitle("Distribution of mean sales by Decile, top decile removed")+
+  theme_bw()
+```
+
 
 
 
