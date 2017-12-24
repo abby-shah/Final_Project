@@ -8,4 +8,4 @@
 
 * Click [here](write_up.pdf) to read a summary report.
 
-* Click [here](http://htmlpreview.github.io/github.com/abby-shah/Final_Project/blob/master/Final_Project.html) to view full report `Final_Project.html`.
+* Click [here] http://rpubs.com/abbyshah/S495-finalproj-groupF to view full report `Final_Project.html`.
